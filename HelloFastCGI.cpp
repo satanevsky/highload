@@ -15,11 +15,13 @@ class HelloFastCGI : virtual public fastcgi::Component, virtual public fastcgi::
     CassFuture* connect_future;
     CassCluster* cluster;
     CassSession* session;
+    CassUuidGen* uuid_gen;
 
     void cassandra_init() {
         connect_future = NULL;
         cluster = cass_cluster_new();
         session = cass_session_new();
+        uuid_gen = cass_uuid_gen_new();
 
         char* hosts = "127.0.0.1";
 
@@ -68,42 +70,72 @@ class HelloFastCGI : virtual public fastcgi::Component, virtual public fastcgi::
             cassandra_destroy();
         }
 
+        virtual void handle_get_id_request(fastcgi::Request *request, fastcgi::HandlerContext *context) {
+            if (request->hasArg("id")) {
+                std::string id = request->getArg("id");
+                char query[100];
+                snprintf(query, sizeof(query), "SELECT text FROM jokes WHERE id = %s", id.c_str());
+                CassStatement* statement = cass_statement_new(query, 0);
+                CassFuture* result_future = cass_session_execute(session, statement);
+
+                if (cass_future_error_code(result_future) == CASS_OK) {
+                    const CassResult* result = cass_future_get_result(result_future);
+
+                    const CassRow* row = cass_result_first_row(result);
+
+                    if (row != NULL) {
+                        const CassValue* value = cass_row_get_column_by_name(row, "text");
+
+                        const char* text;
+                        size_t text_length;
+                        cass_value_get_string(value, &text, &text_length);
+                        std::stringbuf text_buf(text);
+                        request->write(&text_buf);
+                    }
+                    cass_result_free(result);
+                }
+
+                cass_future_free(result_future);
+                cass_statement_free(statement);
+            }
+        }
+
+        virtual void handle_post_joke(fastcgi::Request *request, fastcgi::HandlerContext *context) {
+            if (request->hasArg("text")) {
+                std::string text = request->getArg("text");
+                CassUuid uuid;
+                cass_uuid_gen_time(uuid_gen, &uuid);
+                char query[1000];
+                char uuid_str[100];
+                cass_uuid_string(uuid, uuid_str);
+                snprintf(
+                    query,
+                    sizeof(query),
+                    "INSERT INTO jokes (id, text, creation_timestamp, likes, dislikes)\
+                    VALUES(%s, '%s', toTimestamp(now()), 0, 0);",
+                    uuid_str,
+                    text.c_str()
+                );
+                CassStatement* statement = cass_statement_new(query, 0);
+                CassFuture* result_future = cass_session_execute(session, statement);
+                if (cass_future_error_code(result_future) == CASS_OK) {
+                    std::stringbuf uuid_buf(uuid_str);
+                    request->write(&uuid_buf);
+                }
+                cass_statement_free(statement);
+            }
+        }
+
         virtual void handleRequest(fastcgi::Request *request, fastcgi::HandlerContext *context) {
                 std::cerr << "here" << std::endl;
                 request->setContentType("text/plain");
                 std::string method = request->getRequestMethod();
-                std::stringbuf to_add;
 
                 if (method == "GET") {
-                    if (request->hasArg("id")) {
-                        std::string id = request->getArg("id");
-                        char query[100];
-                        snprintf(query, sizeof(query), "SELECT text FROM jokes WHERE id = %s", id.c_str());
-
-                        CassStatement* statement = cass_statement_new(query, 0);
-                        CassFuture* result_future = cass_session_execute(session, statement);
-
-                        if (cass_future_error_code(result_future) == CASS_OK) {
-                            const CassResult* result = cass_future_get_result(result_future);
-
-                            const CassRow* row = cass_result_first_row(result);
-
-                            if (row != NULL) {
-                                const CassValue* value = cass_row_get_column_by_name(row, "text");
-
-                                const char* text;
-                                size_t text_length;
-                                cass_value_get_string(value, &text, &text_length);
-                                to_add.str(to_add.str() + text);
-                            }
-                            cass_result_free(result);
-                        }
-
-                        cass_future_free(result_future);
-                        cass_statement_free(statement);
-                    }
+                    handle_get_id_request(request, context);
+                } else if (method == "POST") {
+                    handle_post_joke(request, context);
                 }
-                request->write(&to_add);
         }
 };
 
