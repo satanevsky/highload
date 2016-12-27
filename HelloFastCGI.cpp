@@ -127,7 +127,6 @@ class HelloFastCGI : virtual public fastcgi::Component, virtual public fastcgi::
         }
 
         virtual void handleRequest(fastcgi::Request *request, fastcgi::HandlerContext *context) {
-                std::cerr << "here" << std::endl;
                 request->setContentType("text/plain");
                 std::string method = request->getRequestMethod();
 

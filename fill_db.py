@@ -1,3 +1,7 @@
+import sys
+import uuid
+import string
+import random
 from cassandra.cluster import Cluster
 from cassandra.policies import DCAwareRoundRobinPolicy
 
@@ -20,11 +24,21 @@ def main():
         )
     """)
 
-    session.execute("""
-        INSERT INTO jokes (id, text, creation_timestamp, likes, dislikes)
-            VALUES(c37d661d-7e61-49ea-96a5-68c34e83db3a, 'hi, here is my joke', 111111, 10, 20) IF NOT EXISTS;
-    """)
-
+    uuids = list()
+    letters = string.ascii_uppercase + string.ascii_lowercase + string.digits
+    for _ in xrange(int(sys.argv[1])):
+        text = ''.join(random.choice(letters) for _ in xrange(200))
+        uid = str(uuid.uuid1())
+        session.execute("""
+            INSERT INTO jokes (id, text, creation_timestamp, likes, dislikes)
+                VALUES({}, '{}', toTimestamp(now()), 10, 20) IF NOT EXISTS;
+        """.format(uid, text))
+        uuids.append(uid)
+    if len(sys.argv) >= 3 and sys.argv[2] == 'True':
+        with open('inserted_uuids', 'w') as f:
+            for el in uuids:
+                f.write(el)
+                f.write('\n')
 
 
 
