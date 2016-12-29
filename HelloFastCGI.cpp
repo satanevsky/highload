@@ -11,6 +11,40 @@
 
 //#include <QDebug>
 
+struct RequestAndStatement{
+    fastcgi::Request *request;
+    CassStatement* statement;
+    RequestAndStatement(
+        fastcgi::Request *request,
+        CassStatement* statement):request(request), statement(statement){};
+};
+
+
+void get_id_return(CassFuture* result_future, void* data) {
+    RequestAndStatement* request_and_statement = reinterpret_cast<RequestAndStatement*>(data);
+
+    fastcgi::Request *request = request_and_statement->request;
+    CassStatement* statement = request_and_statement->statement;
+
+    const CassResult* result = cass_future_get_result(result_future);
+
+    const CassRow* row = cass_result_first_row(result);
+
+    if (row != NULL) {
+        const CassValue* value = cass_row_get_column_by_name(row, "text");
+
+        const char* text;
+        size_t text_length;
+        cass_value_get_string(value, &text, &text_length);
+        std::stringbuf text_buf(text);
+        request->write(&text_buf);
+    }
+    cass_result_free(result);
+    cass_future_free(result_future);
+    cass_statement_free(statement);
+    delete request_and_statement;
+}
+
 class HelloFastCGI : virtual public fastcgi::Component, virtual public fastcgi::Handler {
     CassFuture* connect_future;
     CassCluster* cluster;
@@ -23,7 +57,7 @@ class HelloFastCGI : virtual public fastcgi::Component, virtual public fastcgi::
         session = cass_session_new();
         uuid_gen = cass_uuid_gen_new();
 
-        char* hosts = "127.0.0.1";
+        char hosts[] = "127.0.0.1";
 
         cass_cluster_set_contact_points(cluster, hosts);
         connect_future = cass_session_connect(session, cluster);
@@ -57,6 +91,7 @@ class HelloFastCGI : virtual public fastcgi::Component, virtual public fastcgi::
         cass_session_free(session);
     }
 
+
     public:
         HelloFastCGI(fastcgi::ComponentContext *context) :
                 fastcgi::Component(context) {
@@ -79,24 +114,14 @@ class HelloFastCGI : virtual public fastcgi::Component, virtual public fastcgi::
                 CassFuture* result_future = cass_session_execute(session, statement);
 
                 if (cass_future_error_code(result_future) == CASS_OK) {
-                    const CassResult* result = cass_future_get_result(result_future);
-
-                    const CassRow* row = cass_result_first_row(result);
-
-                    if (row != NULL) {
-                        const CassValue* value = cass_row_get_column_by_name(row, "text");
-
-                        const char* text;
-                        size_t text_length;
-                        cass_value_get_string(value, &text, &text_length);
-                        std::stringbuf text_buf(text);
-                        request->write(&text_buf);
-                    }
-                    cass_result_free(result);
+                    cass_future_set_callback(
+                        result_future,
+                        get_id_return,
+                        new RequestAndStatement(request, statement));
+                } else {
+                    cass_future_free(result_future);
+                    cass_statement_free(statement);
                 }
-
-                cass_future_free(result_future);
-                cass_statement_free(statement);
             }
         }
 
